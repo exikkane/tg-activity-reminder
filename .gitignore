@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/
+*.db*
+*.log
+
+ssh-proxy/
+
+# Local exports, private deployment notes and unpublished case material
+*.csv
+*.zip
+*.tar.gz
+*.pem
+*.key
+*.sqlite*
+work/
+outputs/
+docs/case/
+REPORT.md
+oauth-*.png

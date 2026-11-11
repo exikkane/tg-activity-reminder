@@ -1,0 +1,25 @@
+# Existing Caddy proxy reaches this service via youtrack-net; no host port is published.
+services:
+  timebot:
+    build: .
+    image: larionov-youtrack-timebot:local
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - bot-data:/data
+    networks:
+      - youtrack-net
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    cpus: 1
+    stop_grace_period: 40s
+volumes:
+  bot-data:
+networks:
+  youtrack-net:
+    external: true
