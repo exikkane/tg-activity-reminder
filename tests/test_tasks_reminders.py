@@ -85,3 +85,35 @@ async def test_days_and_ambiguous_delivery(settings, db):
     await service.tick(now)
     assert send.await_count == 1
     assert db.one("SELECT status FROM notifications")["status"] == "uncertain"
+
+
+async def test_personal_times_weekends_timezone_and_restart(settings, db):
+    db.bind(2, {"id": "u2", "login": "bob"}, {"access_token": "b"}, "UTC")
+    db.save_reminder_preference(1, "19:30", "2026-11-14")
+    db.save_reminder_preference(2, "19:45", "2026-11-14")
+    send = AsyncMock()
+    service = ReminderService(settings, db, send)
+    # Saturday: Alice uses UTC+4, Bob UTC. Each gets exactly one notification.
+    await service.tick(datetime(2026, 11, 14, 15, 29, tzinfo=timezone.utc))
+    assert send.await_count == 0
+    await service.tick(datetime(2026, 11, 14, 15, 30, tzinfo=timezone.utc))
+    assert [call.args[0] for call in send.await_args_list] == [1]
+    service = ReminderService(settings, db, send)
+    await service.tick(datetime(2026, 11, 14, 19, 45, tzinfo=timezone.utc))
+    assert [call.args[0] for call in send.await_args_list] == [1, 2]
+    await service.tick(datetime(2026, 11, 15, 15, 30, tzinfo=timezone.utc))
+    assert [call.args[0] for call in send.await_args_list] == [1, 2, 1]
+
+
+async def test_personal_schedule_deferral_midnight_and_no_duplicate(settings, db):
+    send = AsyncMock()
+    service = ReminderService(settings, db, send)
+    db.save_reminder_preference(1, "00:00", "2026-11-15")
+    await service.tick(datetime(2026, 11, 14, 19, 59, tzinfo=timezone.utc))
+    assert send.await_count == 0
+    await service.tick(datetime(2026, 11, 14, 20, 0, tzinfo=timezone.utc))
+    assert send.await_count == 1  # Sunday midnight in the user's timezone.
+    assert send.call_args.args[1].date().isoformat() == "2026-11-15"
+    db.save_reminder_preference(1, "21:00", "2026-11-15")
+    await service.tick(datetime(2026, 11, 15, 17, 0, tzinfo=timezone.utc))
+    assert send.await_count == 1  # A later setting cannot duplicate today's delivery.

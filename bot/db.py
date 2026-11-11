@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS free_entries (
  description TEXT NOT NULL, minutes INTEGER NOT NULL CHECK(minutes > 0),
  day TEXT NOT NULL, zone TEXT NOT NULL, created REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS free_entries_owner_day ON free_entries(tg, day);
+CREATE TABLE IF NOT EXISTS reminder_preferences (
+ tg INTEGER PRIMARY KEY, time TEXT NOT NULL, from_day TEXT NOT NULL);
 """
 
 
@@ -76,6 +78,18 @@ class DB:
 
     def user(self, tg):
         return self.one("SELECT * FROM users WHERE tg=?", (tg,))
+
+    def reminder_preference(self, tg):
+        return self.one("SELECT * FROM reminder_preferences WHERE tg=?", (tg,))
+
+    def save_reminder_preference(self, tg, value, from_day):
+        # Retain personal settings across OAuth disconnect/rebinding.
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO reminder_preferences VALUES(?,?,?)",
+                (tg, value, from_day),
+            )
+            self.conn.execute("DELETE FROM conversations WHERE tg=?", (tg,))
 
     def bind(self, tg, me, tokens, zone):
         with self.conn:

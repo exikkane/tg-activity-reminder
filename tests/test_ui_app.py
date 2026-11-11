@@ -97,7 +97,7 @@ async def test_long_titles_pagination_and_callbacks(ui, backend):
     sent = ui.bot.send_message.call_args
     assert "<&>" not in sent.args[1]
     keys = sent.kwargs["reply_markup"].inline_keyboard
-    assert len(keys) == 14
+    assert len(keys) == 15
     assert any(row[0].text == "Вперёд ➡️" for row in keys)
     for row in keys:
         for button in row:
@@ -118,6 +118,7 @@ async def test_commands_menu(ui):
         "free",
         "report",
         "teamreport",
+        "settings",
         "cancel",
         "account",
         "disconnect",
@@ -503,3 +504,74 @@ async def test_team_work_repeated_page_or_failed_page_never_partial(yt, backend)
         yt.request = AsyncMock(side_effect=[[item], second])
         with pytest.raises(ServiceError):
             await yt.month_work(1, ["u1"], "2026-11-01", "2026-12-01")
+
+
+async def test_personal_reminder_settings_dialog_validation_and_persistence(
+    ui, db, settings, monkeypatch
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from bot.db import DB
+
+    monkeypatch.setattr(
+        ui.preferences,
+        "now",
+        lambda tg: datetime(2026, 11, 14, 12, 0, tzinfo=ZoneInfo("Europe/Ulyanovsk")),
+    )
+    await ui.command(message("/settings"))
+    assert "20:00" in ui.bot.send_message.call_args.args[1]
+    key = ui.bot.send_message.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    await ui.callback(callback(key.callback_data))
+    for invalid in ("24:00", "19:60", "9:30", "19:30:00", "18ч", "-1:00"):
+        await ui.text(message(invalid))
+        assert db.reminder_preference(1) is None
+        assert db.conversation(1)["mode"] == "settings_time"
+    await ui.text(message("19:30"))
+    assert db.reminder_preference(1)["time"] == "19:30"
+    assert db.reminder_preference(1)["from_day"] == "2026-11-14"
+    assert db.conversation(1) is None
+    assert db.reminder_preference(2) is None
+    db.disconnect(1)
+    db.bind(1, {"id": "u1", "login": "alice"}, {"access_token": "a"}, "Europe/Ulyanovsk")
+    reopened = DB(settings.db_path, settings.token_encryption_key.get_secret_value())
+    try:
+        assert reopened.reminder_preference(1)["time"] == "19:30"
+    finally:
+        reopened.close()
+
+
+async def test_settings_past_time_and_already_sent_take_effect_tomorrow(ui, db, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    monkeypatch.setattr(
+        ui.preferences,
+        "now",
+        lambda tg: datetime(2026, 11, 14, 20, 0, tzinfo=ZoneInfo("Europe/Ulyanovsk")),
+    )
+    for value in ("00:00", "19:30", "20:00"):
+        await ui.command(message("/settings " + value))
+        assert db.reminder_preference(1)["from_day"] == "2026-11-15"
+        assert "15.11.2026" in ui.bot.send_message.call_args.args[1]
+    await ui.command(message("/settings 23:59"))
+    assert db.reminder_preference(1)["from_day"] == "2026-11-14"
+    db.claim_notification(1, "2026-11-14")
+    await ui.command(message("/settings 23:00"))
+    assert db.reminder_preference(1)["from_day"] == "2026-11-15"
+
+
+async def test_settings_cancel_foreign_button_and_expired_oauth(ui, db, backend):
+    token = db.action(1, "settings_time")
+    await ui.callback(callback(token, user=2))
+    assert db.conversation(1) is None and db.conversation(2) is None
+    db.execute("UPDATE users SET active=0 WHERE tg=1")
+    await ui.callback(callback(token))
+    assert db.conversation(1)["mode"] == "settings_time"
+    cancel = ui.bot.edit_message_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    await ui.callback(callback(cancel.callback_data))
+    assert db.conversation(1) is None and db.reminder_preference(1) is None
+    await ui.command(message("/settings 21:15"))
+    assert db.reminder_preference(1)["time"] == "21:15"
+    assert "обнови подключение" in ui.bot.send_message.call_args.args[1]
+    assert not backend.calls

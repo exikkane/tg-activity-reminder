@@ -19,6 +19,7 @@ from aiogram.types import (
 
 from .duration import InvalidDuration, human, parse_duration
 from .free_time import FreeTime
+from .preferences import Preferences
 from .reports import Reports
 from .youtrack import Reconnect, ServiceError, Uncertain, require_visible_stage, spent
 
@@ -39,6 +40,7 @@ class UI:
         self.s, self.db, self.yt, self.work, self.bot = settings, db, yt, work, bot
         self.local = FreeTime(self)
         self.reports = Reports(self)
+        self.preferences = Preferences(self)
         self.dp = Dispatcher()
         router = Router()
         router.message.filter(F.chat.type == "private")
@@ -46,7 +48,15 @@ class UI:
         router.message.register(
             self.command,
             Command(
-                "start", "tasks", "account", "disconnect", "free", "report", "teamreport", "cancel"
+                "start",
+                "tasks",
+                "account",
+                "disconnect",
+                "free",
+                "report",
+                "teamreport",
+                "cancel",
+                "settings",
             ),
         )
         router.callback_query.register(self.callback)
@@ -131,7 +141,15 @@ class UI:
         async with self.locks[tg]:
             command = message.text.split()[0].split("@")[0]
             try:
-                if command == "/free":
+                if command == "/settings":
+                    parts = message.text.split()
+                    if len(parts) > 2:
+                        raise ValueError("Используй /settings или /settings 19:30.")
+                    if len(parts) == 2:
+                        await self.preferences.save(tg, parts[1])
+                    else:
+                        await self.preferences.show(tg)
+                elif command == "/free":
                     await self.local.begin(tg)
                 elif command in {"/report", "/teamreport"}:
                     parts = message.text.split()
@@ -201,7 +219,7 @@ class UI:
                 "ноября",
                 "декабря",
             )
-            title = f"<b>🕗 Запиши итоги рабочего дня</b>\n\nСегодня {reminder.day} {months[reminder.month - 1]}.\n\n"
+            title = f"<b>🔔 Запиши итоги рабочего дня</b>\n\nСегодня {reminder.day} {months[reminder.month - 1]}.\n\n"
         else:
             title = "<b>🔎 Результаты поиска</b>\n\n" if search else "<b>📋 Мои задачи</b>\n\n"
         rows = []
@@ -237,6 +255,7 @@ class UI:
         rows.append([self.button(tg, "➕ Добавить другую задачу", "search")])
         rows.append([self.button(tg, "✍️ Записать работу без YouTrack", "free")])
         rows.append([self.report_button(tg)])
+        rows.append([self.button(tg, "🔔 Время напоминания", "settings")])
         if search:
             rows.append([self.button(tg, "📋 Мои задачи", "list")])
         await self.show(tg, title, self.keys(*rows), message)
@@ -317,6 +336,12 @@ class UI:
             try:
                 action = self.db.get_action(callback.data, tg)
                 kind, data = action["kind"], action["data"]
+                if kind in {"settings", "settings_time"}:
+                    if kind == "settings":
+                        await self.preferences.show(tg, callback.message)
+                    else:
+                        await self.preferences.begin(tg, callback.message)
+                    return
                 if kind in {"team_report", "team_export"}:
                     self.reports.authorize(tg)
                     self.db.clear_conversation(tg)
@@ -402,7 +427,10 @@ class UI:
         async with self.locks[tg]:
             try:
                 conversation = self.db.conversation(tg)
-                if conversation and conversation["mode"].startswith("free_"):
+                if conversation and (
+                    conversation["mode"].startswith("free_")
+                    or conversation["mode"] == "settings_time"
+                ):
                     self.local.user(tg)
                 else:
                     await self.guard(tg)
@@ -410,7 +438,9 @@ class UI:
                     await self.show(tg, "Выбери задачу командой /tasks.")
                     return
                 text = message.text.strip()
-                if conversation["mode"] == "free_description":
+                if conversation["mode"] == "settings_time":
+                    await self.preferences.save(tg, text)
+                elif conversation["mode"] == "free_description":
                     if not 1 <= len(text) <= 1000:
                         raise ValueError("Описание должно содержать от 1 до 1000 символов.")
                     self.db.set_conversation(
@@ -464,7 +494,7 @@ class UI:
         except ServiceError:
             await self.show(
                 tg,
-                "<b>🕗 Запиши итоги рабочего дня</b>\n\nНе удалось загрузить задачи из YouTrack. Попробуй /tasks позже.",
+                "<b>🔔 Запиши итоги рабочего дня</b>\n\nНе удалось загрузить задачи из YouTrack. Попробуй /tasks позже.",
                 self.local.buttons(tg),
             )
 
@@ -476,6 +506,7 @@ class UI:
                 BotCommand(command="free", description="Работа без задачи в YouTrack"),
                 BotCommand(command="report", description="Месячный отчёт и CSV"),
                 BotCommand(command="teamreport", description="Общий отчёт для администратора"),
+                BotCommand(command="settings", description="Время напоминания"),
                 BotCommand(command="cancel", description="Отменить ввод"),
                 BotCommand(command="account", description="Подключённый аккаунт"),
                 BotCommand(command="disconnect", description="Отключить аккаунт"),

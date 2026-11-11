@@ -104,9 +104,13 @@ class ReminderService:
             weekday = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")[local.weekday()]
             if self.s.reminder_days != "all" and weekday not in self.s.reminder_days.split(","):
                 continue
-            if local.strftime("%H:%M") < self.s.reminder_time:
-                continue
             day = local.date().isoformat()
+            preference = self.db.reminder_preference(user["tg"])
+            target = preference["time"] if preference else self.s.reminder_time
+            if preference and day < preference["from_day"]:
+                continue
+            if local.strftime("%H:%M") < target:
+                continue
             if not self.db.claim_notification(user["tg"], day):
                 continue
             # Claim before sending: at most once even after a crash/ambiguous Telegram result.
